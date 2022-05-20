@@ -10,10 +10,71 @@ on:
         required: true
         type: string
         description: "The Jellyfin version (eg: 10.8.0-beta1, 10.8.0-beta2)"
+      ffmpeg_url:
+        required: false
+        type: string
+        default: https://evermeet.cx/pub/ffmpeg/ffmpeg-4.4.1.zip
+      ffprobe_url:
+        required: false
+        type: string
+        default: https://evermeet.cx/pub/ffprobe/ffprobe-4.4.1.zip
 
 jobs:
   publish:
-    uses: ./.github/workflows/_meta-publish.yaml
-    with:
-      jellyfin_version: ${{ github.event.release.tag_name || github.event.inputs.jellyfin_version }}
-      server_url: ${{ format('https://repo.jellyfin.org/releases/server/macos/stable-pre/{0}/combined/jellyfin_{0}.tar.gz', (github.event.release.tag_name || github.event.inputs.jellyfin_version)) }}
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      
+      - name: Set Version
+        run: |
+          sed -i -E 's/MARKETING_VERSION = .*/MARKETING_VERSION = ${{ inputs.jellyfin_version }};/g' Jellyfin\ Server.xcodeproj/project.pbxproj
+
+      - name: Import Signing Certificate
+        uses: devbotsxyz/import-signing-certificate@v1.0.0
+        with:
+          certificate-data: ${{ secrets.DEVELOPMENT_CERTIFICATE_DATA }}
+          certificate-passphrase: ${{ secrets.DEVELOPMENT_CERTIFICATE_PASSPHRASE }}
+          keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
+
+      - name: Archive App
+        uses: devbotsxyz/xcode-archive@v1
+          
+      - name: Setup Jellyfin server
+        run: |
+          curl -L -o jellyfin.tar.gz https://repo.jellyfin.org/releases/server/macos/stable-pre/10.8.0-beta3/combined/jellyfin_10.8.0-beta3.tar.gz
+          tar -xf jellyfin.tar.gz
+          # move Jellyfin server
+          mv jellyfin_*/* Jellyfin\ Server.xcarchive/Products/Applications/Jellyfin\ Server.app/Contents/MacOS
+          # move Jellyfin web
+          mv Jellyfin\ Server.xcarchive/Products/Applications/Jellyfin\ Server.app/Contents/MacOS/jellyfin-web Jellyfin\ Server.xcarchive/Products/Applications/Jellyfin\ Server.app/Contents/Resources
+          
+      - name: Setup ffmpeg
+        run: |
+          curl -L -o ffmpeg.zip ${{ inputs.ffmpeg_url }}
+          unzip ffmpeg.zip
+          mv ffmpeg Jellyfin\ Server.xcarchive/Products/Applications/Jellyfin\ Server.app/Contents/MacOS
+
+      - name: Setup ffprobe
+        run: |
+          curl -L -o ffprobe.zip ${{ inputs.ffprobe_url }}
+          unzip ffprobe.zip
+          mv ffprobe Jellyfin\ Server.xcarchive/Products/Applications/Jellyfin\ Server.app/Contents/MacOS             
+          
+      - name: Export
+        uses: devbotsxyz/xcode-export-archive@v1.0.0
+
+      - name: Notarize Release Build
+        uses: devbotsxyz/xcode-notarize@v1
+        with:
+          product-path: "Jellyfin Server.xcarchive/Products/Applications/Jellyfin Server.app"
+          appstore-connect-username: ${{ secrets.NOTARIZATION_USERNAME }}
+          appstore-connect-password: ${{ secrets.NOTARIZATION_PASSWORD }}
+          
+#      - name: Upload Artifact
+#        uses: actions/upload-artifact@v2
+#        with:
+#          name: macos-x64
+#          retention-days: 30
+#          if-no-files-found: error
+#          path: ./Export/Jellyfin.app
